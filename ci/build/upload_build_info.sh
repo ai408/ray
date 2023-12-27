@@ -3,11 +3,14 @@
 # Cause the script to exit if a single command fails.
 set -ex
 
+chmod -R a+r /tmp/bazel_event_logs
+
 readonly PIPELINE_POSTMERGE="0189e759-8c96-4302-b6b5-b4274406bf89"
 readonly PIPELINE_CIV1_BRANCH="0183465b-c6fb-479b-8577-4cfd743b545d"
 if [[
   "${BUILDKITE_PIPELINE_ID:-}" != "${PIPELINE_POSTMERGE}" && 
-  "${BUILDKITE_PIPELINE_ID:-}" != "${PIPELINE_CIV1_BRANCH}"
+  "${BUILDKITE_PIPELINE_ID:-}" != "${PIPELINE_CIV1_BRANCH}" &&
+  "${BUILDKITE_BRANCH:-}" != "master"
 ]]; then
   echo "Skip build info uploading on non-postmerge pipeline."
   exit 0
@@ -19,8 +22,10 @@ RAY_DIR=$(cd "${ROOT_DIR}/../../"; pwd)
 cd "${RAY_DIR}"
 
 cleanup() {
-  # Cleanup the directory because macOS file system is shared between builds.
-  rm -rf /tmp/bazel_event_logs
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    # Cleanup the directory because macOS file system is shared between builds.
+    rm -rf /tmp/bazel_event_logs
+  fi
 }
 trap cleanup EXIT
 

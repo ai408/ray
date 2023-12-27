@@ -1,6 +1,8 @@
-import os
+import json
 import platform
+import os
 import subprocess
+import tempfile
 from typing import List, Optional
 
 from ci.ray_ci.utils import shard_tests, chunk_into_n
@@ -34,10 +36,15 @@ class TesterContainer(Container):
         self.test_envs = test_envs or []
         self.build_type = build_type
         self.network = network
+        self.skip_ray_installation = skip_ray_installation
         self.gpus = gpus
         assert (
             self.gpus == 0 or self.gpus >= self.shard_count
         ), f"Not enough gpus ({self.gpus} provided) for {self.shard_count} shards"
+
+        # store bazel test logs
+        self.bazel_event_logs = tempfile.mkdtemp()
+        self.add_volume(f"{self.bazel_event_logs}:/tmp/bazel_event_logs")
 
         if not skip_ray_installation:
             self.install_ray(build_type)
@@ -71,7 +78,13 @@ class TesterContainer(Container):
             for i in range(len(chunks))
         ]
         exits = [run.wait() for run in runs]
+
+        # upload test results
+        self._upload_test_results()
         return all(exit == 0 for exit in exits)
+
+    def get_bazel_event_logs(self) -> str:
+        return self.bazel_event_logs
 
     def _run_tests_in_docker(
         self,
@@ -81,14 +94,10 @@ class TesterContainer(Container):
         test_arg: Optional[str] = None,
     ) -> subprocess.Popen:
         logger.info("Running tests: %s", test_targets)
-        commands = []
-        if os.environ.get("BUILDKITE_BRANCH", "") == "master":
-            commands.extend(
-                [
-                    "cleanup() { ./ci/build/upload_build_info.sh; }",
-                    "trap cleanup EXIT",
-                ]
-            )
+        commands = [
+            "cleanup() { ./ci/build/upload_build_info.sh; }",
+            "trap cleanup EXIT",
+        ]
         if platform.system() == "Windows":
             # allow window tests to access aws services
             commands.append(
@@ -126,3 +135,21 @@ class TesterContainer(Container):
                 gpu_ids=gpu_ids,
             )
         )
+
+    def _upload_test_results(self) -> None:
+        logger.info("Uploading test results to S3")
+        bazel_log_files = [
+            os.path.join(self.bazel_event_logs, file)
+            for file in os.listdir(self.bazel_event_logs)
+            if os.path.isfile(os.path.join(self.bazel_event_logs, file))
+            and file.startswith("bazel_log")
+        ]
+        for file in bazel_log_files:
+            with open(file, "rb") as f:
+                lines = [json.loads(line.decode("utf-8")) for line in f.readlines()]
+                results = [line for line in lines if "testResult" in line]
+                for result in results:
+                    logger.info(
+                        f"Test: {result['id']['testResult']['label']}; "
+                        f"Result: {result['testResult']['status']}"
+                    )

@@ -30,10 +30,16 @@ class Container(abc.ABC):
     A wrapper for running commands in ray ci docker container
     """
 
-    def __init__(self, docker_tag: str, envs: Optional[List[str]] = None) -> None:
+    def __init__(
+        self,
+        docker_tag: str,
+        envs: Optional[List[str]] = None,
+        volumes: Optional[List[str]] = None,
+    ) -> None:
         self.docker_tag = docker_tag
         self.envs = envs or []
         self.envs += _DOCKER_ENV
+        self.volumes = volumes or []
 
     def run_script_with_output(self, script: List[str]) -> bytes:
         """
@@ -50,6 +56,9 @@ class Container(abc.ABC):
             stdout=sys.stdout,
             stderr=sys.stderr,
         )
+
+    def add_volume(self, volume: str) -> None:
+        self.volumes.append(volume)
 
     def _get_docker_image(self) -> str:
         """
@@ -79,6 +88,8 @@ class Container(abc.ABC):
         command = ["docker", "run", "-i", "--rm"]
         for env in self.envs:
             command += ["--env", env]
+        for volume in self.volumes:
+            command += ["--volume", volume]
         if network:
             command += ["--network", network]
         return (
